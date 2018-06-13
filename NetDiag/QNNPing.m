@@ -36,6 +36,16 @@ const int kQNNInvalidPingResponse = -22001;
               stddev:(NSTimeInterval)stddev;
 @end
 
+@interface QNNPingResponse ()
+
+- (instancetype)init:(NSInteger)code
+                  ip:(NSString *)ip
+                size:(NSUInteger)size
+                 rtt:(NSTimeInterval)rtt
+                ttl:(NSInteger)ttl
+               count:(NSInteger)count;
+@end
+
 @implementation QNNPingResult
 
 - (NSString *)description {
@@ -66,6 +76,34 @@ const int kQNNInvalidPingResponse = -22001;
         _totalTime = totalTime;
         _count = count;
         _stddev = stddev;
+    }
+    return self;
+}
+
+@end
+
+@implementation QNNPingResponse
+
+- (NSString *)description {
+    if (_code == 0 || _code == kQNNRequestStoped) {
+        return [NSString stringWithFormat:@"%lu bytes from %@: icmp_seq=%ld ttl=%ld time=%f ms\n", (unsigned long)_size, _ip, _count, (long)_ttl, _rtt];
+    }
+    return [NSString stringWithFormat:@"ping failed %ld", (long)_code];
+}
+
+- (instancetype)init:(NSInteger)code
+                  ip:(NSString *)ip
+                size:(NSUInteger)size
+                 rtt:(NSTimeInterval)rtt
+                ttl:(NSInteger)ttl
+               count:(NSInteger)count {
+    if (self = [super init]) {
+        _code = code;
+        _ip = ip;
+        _size = size;
+        _rtt = rtt;
+        _ttl = ttl;
+        _count = count;
     }
     return self;
 }
@@ -222,6 +260,7 @@ static BOOL isValidResponse(char *buffer, int len, int seq, int identifier) {
 @property (nonatomic, assign) NSUInteger size;
 @property (nonatomic, strong) id<QNNOutputDelegate> output;
 @property (readonly) QNNPingCompleteHandler complete;
+@property (readonly) QNNPingUpdateHandler update;
 
 @property (readonly) NSInteger interval;
 @property (readonly) NSInteger count;
@@ -361,9 +400,60 @@ static BOOL isValidResponse(char *buffer, int len, int seq, int identifier) {
             // ignore broadcast address
             [self.output write:[NSString stringWithFormat:@"%d bytes from %s: icmp_seq=%ld ttl=%d time=%f ms\n", size, inet_ntoa(addr.sin_addr), (long)index, ttl, duration * 1000]];
             durations[index - loss] = duration * 1000;
+            
+            if (_update) {
+                NSInteger code = r;
+                if (_stopped) {
+                    code = kQNNRequestStoped;
+                }
+                
+                QNNPingResponse *response = [[QNNPingResponse alloc] init:code
+                                                                       ip:[NSString stringWithUTF8String:inet_ntoa(addr.sin_addr)]
+                                                                     size: size
+                                                                      rtt:(duration * 1000)
+                                                                      ttl:ttl
+                                                                    count:index];
+                QNNPingResult *result = [self buildResult:code ip:[NSString stringWithUTF8String:inet_ntoa(addr.sin_addr)]
+                                                durations:durations
+                                                    count:index - loss
+                                                     loss:loss
+                                                totalTime:[[NSDate date] timeIntervalSinceDate:begin] * 1000];
+                [QNNQue async_run_main:^(void) {
+                    _update(response, result);
+                }];
+            }
+            
         } else {
             [self.output write:[NSString stringWithFormat:@"Request timeout for icmp_seq %ld\n", (long)index]];
             loss++;
+            
+            if (_update) {
+                NSInteger code = r;
+                if (_stopped) {
+                    code = kQNNRequestStoped;
+                }
+                
+                QNNPingResponse *response = [[QNNPingResponse alloc] init:code
+                                                                       ip:[NSString stringWithUTF8String:inet_ntoa(addr.sin_addr)]
+                                                                     size: 0
+                                                                      rtt:(duration * 1000)
+                                                                      ttl:0
+                                                                    count:index];
+
+                QNNPingResult *result = [[QNNPingResult alloc] init:code
+                                                                 ip:[NSString stringWithUTF8String:inet_ntoa(addr.sin_addr)]
+                                                               size:_size
+                                                                max:0
+                                                                min:0
+                                                                avg:0
+                                                               loss:1
+                                                              count:1
+                                                          totalTime:[[NSDate date] timeIntervalSinceDate:begin] * 1000
+                                                             stddev:0];
+                [QNNQue async_run_main:^(void) {
+                    _update(response, result);
+                }];
+            }
         }
 
         if (index < _count && !_stopped && r == 0) {
@@ -394,12 +484,14 @@ static BOOL isValidResponse(char *buffer, int len, int seq, int identifier) {
 - (instancetype)init:(NSString *)host
                 size:(NSUInteger)size
               output:(id<QNNOutputDelegate>)output
+              update: (QNNPingUpdateHandler)update
             complete:(QNNPingCompleteHandler)complete
             interval:(NSInteger)interval
                count:(NSInteger)count {
     if (self = [super init]) {
         _host = host;
         _size = size;
+        _update = update;
         _output = output;
         _complete = complete;
         _interval = interval;
@@ -411,20 +503,22 @@ static BOOL isValidResponse(char *buffer, int len, int seq, int identifier) {
 + (instancetype)start:(NSString *)host
                  size:(NSUInteger)size
                output:(id<QNNOutputDelegate>)output
+               update: (QNNPingUpdateHandler)update
              complete:(QNNPingCompleteHandler)complete {
-    return [QNNPing start:host size:size output:output complete:complete interval:200 count:10];
+    return [QNNPing start:host size:size output:output update:update complete:complete interval:200 count:10];
 }
 
 + (instancetype)start:(NSString *)host
                  size:(NSUInteger)size
                output:(id<QNNOutputDelegate>)output
+               update: (QNNPingUpdateHandler)update
              complete:(QNNPingCompleteHandler)complete
              interval:(NSInteger)interval
                 count:(NSInteger)count {
     if (host == nil) {
         host = @"";
     }
-    QNNPing *ping = [[QNNPing alloc] init:host size:size output:output complete:complete interval:interval count:count];
+    QNNPing *ping = [[QNNPing alloc] init:host size:size output:output update:update complete:complete interval:interval count:count];
     [QNNQue async_run_serial:^{
         [ping run];
     }];
