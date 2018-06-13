@@ -28,6 +28,20 @@ extern const int kQNNInvalidPingResponse;
 
 @end
 
+@interface QNNPingResponse : NSObject
+
+@property (readonly) NSInteger code;
+@property (readonly) NSString* ip;
+@property (readonly) NSUInteger size;
+@property (readonly) NSTimeInterval rtt;
+@property (readonly) NSInteger ttl;
+@property (readonly) NSInteger count;
+
+- (NSString*)description;
+
+@end
+
+typedef void (^QNNPingUpdateHandler)(QNNPingResponse*, QNNPingResult*);
 typedef void (^QNNPingCompleteHandler)(QNNPingResult*);
 
 @interface QNNPing : NSObject <QNNStopDelegate>
@@ -35,11 +49,13 @@ typedef void (^QNNPingCompleteHandler)(QNNPingResult*);
 + (instancetype)start:(NSString*)host
                  size:(NSUInteger)size
                output:(id<QNNOutputDelegate>)output
+               update: (QNNPingUpdateHandler)update
              complete:(QNNPingCompleteHandler)complete;
 
 + (instancetype)start:(NSString*)host
                  size:(NSUInteger)size
                output:(id<QNNOutputDelegate>)output
+               update: (QNNPingUpdateHandler)update
              complete:(QNNPingCompleteHandler)complete
              interval:(NSInteger)interval
                 count:(NSInteger)count;
